@@ -215,15 +215,16 @@ void SendPositionsSnapshot(string header = "ℹ️ Position report")
       double tp     = PositionGetDouble(POSITION_TP);
       double profit = PositionGetDouble(POSITION_PROFIT)
                      + PositionGetDouble(POSITION_SWAP);
-      string dir    = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+      string dir      = (type == POSITION_TYPE_BUY) ? "🟢 BUY" : "🔴 SELL";
+      string plEmoji  = (profit > 0) ? "💰" : (profit < 0) ? "🔥" : "";
 
       totalProfit += profit;
 
-      msg += StringFormat("\n\n%s %s %.2f\nOpen: %.5f  SL: %s  TP: %s\nP/L: %.2f",
+      msg += StringFormat("\n\n%s %s %.2f\nOpen: %.5f  SL: %s  TP: %s\nP/L: %.2f %s",
                            symbol, dir, volume, open,
                            (sl > 0 ? DoubleToString(sl, 5) : "-"),
                            (tp > 0 ? DoubleToString(tp, 5) : "-"),
-                           profit);
+                           profit, plEmoji);
    }
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
