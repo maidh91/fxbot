@@ -204,7 +204,8 @@ void SendPositionsSnapshot(string header = "ℹ️ Position report")
    int total = PositionsTotal();
    if(total == 0)
    {
-      SendTelegramMessage(header + ". No open positions.");
+      SendTelegramMessage(StringFormat("%s. No open positions.\nBalance: %.2f",
+                                       header, AccountInfoDouble(ACCOUNT_BALANCE)));
       return;
    }
 
