@@ -4,11 +4,13 @@
 #include <Trade\Trade.mqh>
 CTrade trade;
 
-input string InpTelegramEnvFile  = ".env"; // Env file (in MQL5\Files)
-input bool   InpTelegramAlerts   = true;     // Alert on position open/close
+input string InpTelegramEnvFile      = ".env"; // Env file (in MQL5\Files)
+input bool   InpTelegramAlerts       = true;    // Alert on position open/close
+input double InpReportIntervalHours  = 4;       // Periodic position report (hours, 0=off)
 
-string g_telegramBotToken = "";
-string g_telegramChatID   = "";
+string   g_telegramBotToken = "";
+string   g_telegramChatID   = "";
+datetime g_lastReportTime   = 0;
 
 #define EDIT_SL   "sltp_edit_sl"
 #define EDIT_TP   "sltp_edit_tp"
@@ -58,13 +60,18 @@ int OnInit()
    ChartRedraw();
 
    PrintFormat("OnInit: %d open position(s)", PositionsTotal());
-   SendPositionsSnapshot();
+   SendPositionsSnapshot("ℹ️ Bot started");
+   g_lastReportTime = TimeCurrent();
+
+   EventSetTimer(60);
 
    return(INIT_SUCCEEDED);
 }
 
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
+
    ObjectDelete(0, EDIT_SL);
    ObjectDelete(0, EDIT_TP);
    ObjectDelete(0, BTN_SL);
@@ -80,6 +87,17 @@ void OnTick()
    // auto-disarm close button if confirm window elapsed
    if(g_closeArmed && TimeCurrent() - g_closeArmedAt > CONFIRM_WINDOW)
       DisarmClose();
+}
+
+void OnTimer()
+{
+   if(InpReportIntervalHours <= 0) return;
+
+   if(TimeCurrent() - g_lastReportTime >= InpReportIntervalHours * 3600)
+   {
+      SendPositionsSnapshot("ℹ️ Periodic report");
+      g_lastReportTime = TimeCurrent();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -168,20 +186,20 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 }
 
 //+------------------------------------------------------------------+
-//| Telegram snapshot of all open positions (sent once on start)     |
+//| Telegram snapshot of all open positions (on start + periodic)    |
 //+------------------------------------------------------------------+
-void SendPositionsSnapshot()
+void SendPositionsSnapshot(string header = "ℹ️ Position report")
 {
    if(!InpTelegramAlerts) return;
 
    int total = PositionsTotal();
    if(total == 0)
    {
-      SendTelegramMessage("ℹ️ Bot started. No open positions.");
+      SendTelegramMessage(header + ". No open positions.");
       return;
    }
 
-   string msg = StringFormat("ℹ️ Bot started. Open positions (%d):", total);
+   string msg = StringFormat("%s. Open positions (%d):", header, total);
    double totalProfit = 0;
 
    for(int i = 0; i < total; i++)
