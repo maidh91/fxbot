@@ -4,6 +4,12 @@
 #include <Trade\Trade.mqh>
 CTrade trade;
 
+input string InpTelegramEnvFile  = ".env"; // Env file (in MQL5\Files)
+input bool   InpTelegramAlerts   = true;     // Alert on position open/close
+
+string g_telegramBotToken = "";
+string g_telegramChatID   = "";
+
 #define EDIT_SL   "sltp_edit_sl"
 #define EDIT_TP   "sltp_edit_tp"
 #define BTN_SL    "sltp_btn_sl"
@@ -29,6 +35,8 @@ datetime g_closeArmedAt = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   LoadTelegramEnv();
+
    int rowClose = Y0;
    int row1     = Y0 + ROW_H;
    int row2     = Y0 + ROW_H * 2;
@@ -48,6 +56,10 @@ int OnInit()
 
    UpdateLabels();
    ChartRedraw();
+
+   PrintFormat("OnInit: %d open position(s)", PositionsTotal());
+   SendPositionsSnapshot();
+
    return(INIT_SUCCEEDED);
 }
 
@@ -112,6 +124,191 @@ void OnChartEvent(const int id, const long &lparam,
          ChartRedraw();
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Telegram alerts on position open/close                           |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
+      return;
+
+   ulong dealTicket = trans.deal;
+   if(!HistoryDealSelect(dealTicket))
+      return;
+
+   long type = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+   if(type != DEAL_TYPE_BUY && type != DEAL_TYPE_SELL)
+      return; // ignore balance/credit/etc.
+
+   long   entry  = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+   string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+   double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   double price  = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+   double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                 + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                 + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+   string dir    = (type == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+
+   if(entry == DEAL_ENTRY_IN)
+   {
+      string msg = StringFormat("\U0001F7E2 Position OPENED\n%s %s\nVolume: %.2f\nPrice: %.5f",
+                                 symbol, dir, volume, price);
+      SendTelegramMessage(msg);
+   }
+   else if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
+   {
+      string msg = StringFormat("\U0001F534 Position CLOSED\n%s %s\nVolume: %.2f\nPrice: %.5f\nP/L: %.2f",
+                                 symbol, dir, volume, price, profit);
+      SendTelegramMessage(msg);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Telegram snapshot of all open positions (sent once on start)     |
+//+------------------------------------------------------------------+
+void SendPositionsSnapshot()
+{
+   if(!InpTelegramAlerts) return;
+
+   int total = PositionsTotal();
+   if(total == 0)
+   {
+      SendTelegramMessage("ℹ️ Bot started. No open positions.");
+      return;
+   }
+
+   string msg = StringFormat("ℹ️ Bot started. Open positions (%d):", total);
+   double totalProfit = 0;
+
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      long   type   = PositionGetInteger(POSITION_TYPE);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double open   = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl     = PositionGetDouble(POSITION_SL);
+      double tp     = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT)
+                     + PositionGetDouble(POSITION_SWAP);
+      string dir    = (type == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+
+      totalProfit += profit;
+
+      msg += StringFormat("\n\n%s %s %.2f\nOpen: %.5f  SL: %s  TP: %s\nP/L: %.2f",
+                           symbol, dir, volume, open,
+                           (sl > 0 ? DoubleToString(sl, 5) : "-"),
+                           (tp > 0 ? DoubleToString(tp, 5) : "-"),
+                           profit);
+   }
+
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double pct     = (balance > 0) ? totalProfit / balance * 100.0 : 0;
+   msg += StringFormat("\n\nTotal P/L: %.2f (%.1f%%)\nBalance: %.2f",
+                        totalProfit, pct, balance);
+   SendTelegramMessage(msg);
+}
+
+void LoadTelegramEnv()
+{
+   g_telegramBotToken = "";
+   g_telegramChatID   = "";
+
+   if(!FileIsExist(InpTelegramEnvFile))
+   {
+      PrintFormat("Telegram env file not found: MQL5\\Files\\%s (create it with TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)",
+                  InpTelegramEnvFile);
+      return;
+   }
+
+   int handle = FileOpen(InpTelegramEnvFile, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+   {
+      PrintFormat("Failed to open %s: %d", InpTelegramEnvFile, GetLastError());
+      return;
+   }
+
+   while(!FileIsEnding(handle))
+   {
+      string line = FileReadString(handle);
+      StringTrimLeft(line);
+      StringTrimRight(line);
+      if(line == "" || StringGetCharacter(line, 0) == '#')
+         continue;
+
+      int eq = StringFind(line, "=");
+      if(eq <= 0)
+         continue;
+
+      string key = line;
+      StringSetLength(key, eq);
+      string value = StringSubstr(line, eq + 1);
+
+      if(key == "TELEGRAM_BOT_TOKEN")
+         g_telegramBotToken = value;
+      else if(key == "TELEGRAM_CHAT_ID")
+         g_telegramChatID = value;
+   }
+   FileClose(handle);
+}
+
+void SendTelegramMessage(string text)
+{
+   if(!InpTelegramAlerts || g_telegramBotToken == "" || g_telegramChatID == "")
+      return;
+
+   string url  = "https://api.telegram.org/bot" + g_telegramBotToken + "/sendMessage";
+   string body = "chat_id=" + g_telegramChatID + "&text=" + UrlEncode(text);
+
+   char   post[];
+   int    bodyLen = StringToCharArray(body, post, 0, StringLen(body)) - 1;
+   ArrayResize(post, bodyLen);
+
+   char   response[];
+   string responseHeaders;
+   string headers = "Content-Type: application/x-www-form-urlencoded\r\n";
+
+   ResetLastError();
+   int res = WebRequest("POST", url, headers, 5000, post, response, responseHeaders);
+   if(res == -1)
+      PrintFormat("Telegram WebRequest failed (%d). Add %s to allowed URLs: Tools > Options > Expert Advisors.",
+                  GetLastError(), "https://api.telegram.org");
+   else if(res != 200)
+      PrintFormat("Telegram send failed, HTTP %d: %s", res, CharArrayToString(response));
+}
+
+string UrlEncode(const string text)
+{
+   uchar utf8[];
+   int   len = StringToCharArray(text, utf8, 0, -1, CP_UTF8) - 1; // drop trailing null
+   if(len < 0) len = 0;
+
+   string result = "";
+   uchar  ch[1];
+
+   for(int i = 0; i < len; i++)
+   {
+      uchar c = utf8[i];
+      if((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+         c == '-' || c == '_' || c == '.' || c == '~')
+      {
+         ch[0] = c;
+         result += CharArrayToString(ch, 0, 1);
+      }
+      else if(c == '\n')
+         result += "%0A";
+      else if(c == ' ')
+         result += "+";
+      else
+         result += StringFormat("%%%02X", c);
+   }
+   return result;
 }
 
 //+------------------------------------------------------------------+

@@ -1,3 +1,4 @@
 Examples/
 UnitTests/
 *.ex5
+.env
