@@ -171,16 +171,25 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                  + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
    string dir    = (type == DEAL_TYPE_BUY) ? "BUY" : "SELL";
 
+   int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   if(digits <= 0) digits = 5;
+   string priceStr = DoubleToString(price, digits);
+
    if(entry == DEAL_ENTRY_IN)
    {
-      string msg = StringFormat("\U0001F7E2 Position OPENED\n%s %s\nVolume: %.2f\nPrice: %.5f",
-                                 symbol, dir, volume, price);
+      string msg = StringFormat("🟢 Position OPENED\n%s %s\nVolume: %.2f\nPrice: %s",
+                                 symbol, dir, volume, priceStr);
       SendTelegramMessage(msg);
    }
    else if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
    {
-      string msg = StringFormat("\U0001F534 Position CLOSED\n%s %s\nVolume: %.2f\nPrice: %.5f\nP/L: %.2f",
-                                 symbol, dir, volume, price, profit);
+      // the closing deal is the opposite side of the position it closed
+      string posDir  = (type == DEAL_TYPE_BUY) ? "SELL" : "BUY";
+      string plEmoji = (profit > 0) ? "💰" : (profit < 0) ? "🔥" : "";
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+      string msg = StringFormat("🔴 Position CLOSED\n%s %s\nVolume: %.2f\nPrice: %s\nP/L: %.2f %s\nBalance: %.2f",
+                                 symbol, posDir, volume, priceStr, profit, plEmoji, balance);
       SendTelegramMessage(msg);
    }
 }
