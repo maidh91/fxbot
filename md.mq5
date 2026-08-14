@@ -21,6 +21,9 @@ datetime g_lastReportTime   = 0;
 #define BTN_CLOSE      "sltp_btn_close"
 #define BTN_CLOSE_BUY  "sltp_btn_close_buy"
 #define BTN_CLOSE_SELL "sltp_btn_close_sell"
+#define LBL_POS        "sltp_lbl_pos"
+#define LBL_SELLS      "sltp_lbl_sells"
+#define LBL_BUYS       "sltp_lbl_buys"
 #define LBL_RISK       "sltp_lbl_risk"
 #define LBL_REWARD     "sltp_lbl_reward"
 
@@ -40,6 +43,20 @@ string   g_armedBtn     = "";
 datetime g_closeArmedAt = 0;
 datetime g_lastUiUpdate = 0;
 #define  CONFIRM_WINDOW 4   // seconds to confirm
+
+// snapshot of the open positions, refreshed for the info section
+struct PosStats
+{
+   int    total;
+   int    buyCount;
+   double buyVolume;
+   int    sellCount;
+   double sellVolume;
+   int    withSL;
+   double slTotal;
+   int    withTP;
+   double tpTotal;
+};
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -71,8 +88,11 @@ int OnInit()
    CreateButton(BTN_TP, btnX, row2, BTN_W, CTRL_H, "TP", clrMediumSeaGreen);
    CreateLabel(LBL_TP, lblX, row2 + 10, "-");
 
-   CreateLabel(LBL_RISK,   X0, rowInfo,          "-", clrTomato);
-   CreateLabel(LBL_REWARD, X0, rowInfo + INFO_H, "-", clrMediumSeaGreen);
+   CreateLabel(LBL_POS,    X0, rowInfo,              "-", clrGold);
+   CreateLabel(LBL_SELLS,  X0, rowInfo + INFO_H,     "-", clrTomato);
+   CreateLabel(LBL_BUYS,   X0, rowInfo + INFO_H * 2, "-", clrMediumSeaGreen);
+   CreateLabel(LBL_RISK,   X0, rowInfo + INFO_H * 3, "-", clrTomato);
+   CreateLabel(LBL_REWARD, X0, rowInfo + INFO_H * 4, "-", clrMediumSeaGreen);
 
    UpdateLabels();
    ChartRedraw();
@@ -99,6 +119,9 @@ void OnDeinit(const int reason)
    ObjectDelete(0, BTN_CLOSE);
    ObjectDelete(0, BTN_CLOSE_BUY);
    ObjectDelete(0, BTN_CLOSE_SELL);
+   ObjectDelete(0, LBL_POS);
+   ObjectDelete(0, LBL_SELLS);
+   ObjectDelete(0, LBL_BUYS);
    ObjectDelete(0, LBL_RISK);
    ObjectDelete(0, LBL_REWARD);
    ChartRedraw();
@@ -490,14 +513,20 @@ void UpdateLabels()
    ObjectSetString(0, LBL_SL, OBJPROP_TEXT, FormatMoneyPct(TotalMoney(slPrice), balance));
    ObjectSetString(0, LBL_TP, OBJPROP_TEXT, FormatMoneyPct(TotalMoney(tpPrice), balance));
 
-   int    withSL = 0, withTP = 0, totalPos = 0;
-   double risk   = TotalAtLevel(true,  withSL, totalPos);
-   double reward = TotalAtLevel(false, withTP, totalPos);
+   PosStats s;
+   CollectStats(s);
+
+   ObjectSetString(0, LBL_POS,   OBJPROP_TEXT,
+                   StringFormat("Positions: %d", s.total));
+   ObjectSetString(0, LBL_SELLS, OBJPROP_TEXT,
+                   StringFormat("SELL: %d   vol %.2f", s.sellCount, s.sellVolume));
+   ObjectSetString(0, LBL_BUYS,  OBJPROP_TEXT,
+                   StringFormat("BUY:  %d   vol %.2f", s.buyCount, s.buyVolume));
 
    ObjectSetString(0, LBL_RISK,   OBJPROP_TEXT,
-                   "SL total: " + FormatLevelTotal(risk,   balance, withSL, totalPos));
+                   "SL total: " + FormatLevelTotal(s.slTotal, balance, s.withSL, s.total));
    ObjectSetString(0, LBL_REWARD, OBJPROP_TEXT,
-                   "TP total: " + FormatLevelTotal(reward, balance, withTP, totalPos));
+                   "TP total: " + FormatLevelTotal(s.tpTotal, balance, s.withTP, s.total));
 }
 
 string FormatMoneyPct(double money, double balance)
@@ -538,30 +567,47 @@ double PositionPLAt(const double price)
 }
 
 //+------------------------------------------------------------------+
-//| Sum P/L over positions valued at their own SL (or TP) level.     |
-//| withLevel = how many positions actually have that level set.     |
+//| One pass over the open positions for everything the info         |
+//| section shows: counts, volume per side, and the P/L each side    |
+//| would realise at its own SL / TP levels.                         |
 //+------------------------------------------------------------------+
-double TotalAtLevel(const bool useSL, int &withLevel, int &totalPos)
+void CollectStats(PosStats &s)
 {
-   withLevel = 0;
-   totalPos  = 0;
-   double sum = 0;
+   ZeroMemory(s);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
 
-      totalPos++;
+      s.total++;
 
-      double level = useSL ? PositionGetDouble(POSITION_SL)
-                           : PositionGetDouble(POSITION_TP);
-      if(level <= 0) continue;
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+      {
+         s.buyCount++;
+         s.buyVolume += volume;
+      }
+      else
+      {
+         s.sellCount++;
+         s.sellVolume += volume;
+      }
 
-      withLevel++;
-      sum += PositionPLAt(level);
+      double sl = PositionGetDouble(POSITION_SL);
+      if(sl > 0)
+      {
+         s.withSL++;
+         s.slTotal += PositionPLAt(sl);
+      }
+
+      double tp = PositionGetDouble(POSITION_TP);
+      if(tp > 0)
+      {
+         s.withTP++;
+         s.tpTotal += PositionPLAt(tp);
+      }
    }
-   return sum;
 }
 
 //+------------------------------------------------------------------+
