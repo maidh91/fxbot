@@ -214,6 +214,12 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
 {
+   // any trade activity can change the position list, so refresh the
+   // info section here rather than waiting for the next tick / timer
+   UpdateLabels();
+   ChartRedraw();
+   g_lastUiUpdate = TimeCurrent();
+
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
       return;
 
