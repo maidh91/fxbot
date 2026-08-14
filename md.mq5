@@ -12,26 +12,33 @@ string   g_telegramBotToken = "";
 string   g_telegramChatID   = "";
 datetime g_lastReportTime   = 0;
 
-#define EDIT_SL   "sltp_edit_sl"
-#define EDIT_TP   "sltp_edit_tp"
-#define BTN_SL    "sltp_btn_sl"
-#define BTN_TP    "sltp_btn_tp"
-#define LBL_SL    "sltp_lbl_sl"
-#define LBL_TP    "sltp_lbl_tp"
-#define BTN_CLOSE "sltp_btn_close"
+#define EDIT_SL        "sltp_edit_sl"
+#define EDIT_TP        "sltp_edit_tp"
+#define BTN_SL         "sltp_btn_sl"
+#define BTN_TP         "sltp_btn_tp"
+#define LBL_SL         "sltp_lbl_sl"
+#define LBL_TP         "sltp_lbl_tp"
+#define BTN_CLOSE      "sltp_btn_close"
+#define BTN_CLOSE_BUY  "sltp_btn_close_buy"
+#define BTN_CLOSE_SELL "sltp_btn_close_sell"
+#define LBL_RISK       "sltp_lbl_risk"
+#define LBL_REWARD     "sltp_lbl_reward"
 
 // layout
-#define X0     20
-#define Y0     30
-#define EDIT_W 120
-#define BTN_W  90
-#define GAP    6
-#define ROW_H  40
-#define CTRL_H 34
+#define X0      20
+#define Y0      30
+#define EDIT_W  120
+#define BTN_W   90
+#define GAP     6
+#define ROW_H   40
+#define CTRL_H  34
+#define PANEL_W (EDIT_W + GAP + BTN_W)
+#define INFO_H  26
 
-// close-all confirm state
-bool     g_closeArmed = false;
+// close confirm state ("" = nothing armed)
+string   g_armedBtn     = "";
 datetime g_closeArmedAt = 0;
+datetime g_lastUiUpdate = 0;
 #define  CONFIRM_WINDOW 4   // seconds to confirm
 
 //+------------------------------------------------------------------+
@@ -40,13 +47,21 @@ int OnInit()
    LoadTelegramEnv();
 
    int rowClose = Y0;
-   int row1     = Y0 + ROW_H;
-   int row2     = Y0 + ROW_H * 2;
+   int rowBuy   = Y0 + ROW_H;
+   int rowSell  = Y0 + ROW_H * 2;
+   int row1     = Y0 + ROW_H * 3;
+   int row2     = Y0 + ROW_H * 4;
+   int rowInfo  = Y0 + ROW_H * 5;
    int btnX = X0 + EDIT_W + GAP;
    int lblX = btnX + BTN_W + GAP;
 
-   CreateButton(BTN_CLOSE, X0, rowClose, EDIT_W + GAP + BTN_W, CTRL_H,
-                "CLOSE ALL", clrDimGray);
+   // full-width rows: a half-width button clips "CLOSE SELL"
+   CreateButton(BTN_CLOSE, X0, rowClose, PANEL_W, CTRL_H,
+                BtnLabel(BTN_CLOSE), BtnColor(BTN_CLOSE));
+   CreateButton(BTN_CLOSE_BUY, X0, rowBuy, PANEL_W, CTRL_H,
+                BtnLabel(BTN_CLOSE_BUY), BtnColor(BTN_CLOSE_BUY));
+   CreateButton(BTN_CLOSE_SELL, X0, rowSell, PANEL_W, CTRL_H,
+                BtnLabel(BTN_CLOSE_SELL), BtnColor(BTN_CLOSE_SELL));
 
    CreateEdit(EDIT_SL, X0,   row1, EDIT_W, CTRL_H, "0.0");
    CreateButton(BTN_SL, btnX, row1, BTN_W, CTRL_H, "SL", clrTomato);
@@ -55,6 +70,9 @@ int OnInit()
    CreateEdit(EDIT_TP, X0,   row2, EDIT_W, CTRL_H, "0.0");
    CreateButton(BTN_TP, btnX, row2, BTN_W, CTRL_H, "TP", clrMediumSeaGreen);
    CreateLabel(LBL_TP, lblX, row2 + 10, "-");
+
+   CreateLabel(LBL_RISK,   X0, rowInfo,          "-", clrTomato);
+   CreateLabel(LBL_REWARD, X0, rowInfo + INFO_H, "-", clrMediumSeaGreen);
 
    UpdateLabels();
    ChartRedraw();
@@ -79,18 +97,33 @@ void OnDeinit(const int reason)
    ObjectDelete(0, LBL_SL);
    ObjectDelete(0, LBL_TP);
    ObjectDelete(0, BTN_CLOSE);
+   ObjectDelete(0, BTN_CLOSE_BUY);
+   ObjectDelete(0, BTN_CLOSE_SELL);
+   ObjectDelete(0, LBL_RISK);
+   ObjectDelete(0, LBL_REWARD);
    ChartRedraw();
 }
 
 void OnTick()
 {
    // auto-disarm close button if confirm window elapsed
-   if(g_closeArmed && TimeCurrent() - g_closeArmedAt > CONFIRM_WINDOW)
+   if(g_armedBtn != "" && TimeCurrent() - g_closeArmedAt > CONFIRM_WINDOW)
       DisarmClose();
+
+   // refresh the info section at most once per second
+   if(TimeCurrent() != g_lastUiUpdate)
+   {
+      g_lastUiUpdate = TimeCurrent();
+      UpdateLabels();
+      ChartRedraw();
+   }
 }
 
 void OnTimer()
 {
+   UpdateLabels();
+   ChartRedraw();
+
    if(InpReportIntervalHours <= 0) return;
 
    if(TimeCurrent() - g_lastReportTime >= InpReportIntervalHours * 3600)
@@ -106,11 +139,18 @@ void OnChartEvent(const int id, const long &lparam,
 {
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
-      if(sparam == BTN_CLOSE)
+      if(sparam == BTN_CLOSE || sparam == BTN_CLOSE_BUY || sparam == BTN_CLOSE_SELL)
       {
-         if(!g_closeArmed) ArmClose();
-         else              { CloseAll(); DisarmClose(); }
-         ObjectSetInteger(0, BTN_CLOSE, OBJPROP_STATE, false);
+         if(g_armedBtn != sparam)
+            ArmClose(sparam);
+         else
+         {
+            if(sparam == BTN_CLOSE)           { ClosePositions(-1); DeletePendingOrders(); }
+            else if(sparam == BTN_CLOSE_BUY)    ClosePositions(POSITION_TYPE_BUY);
+            else                                ClosePositions(POSITION_TYPE_SELL);
+            DisarmClose();
+         }
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          UpdateLabels();
          ChartRedraw();
          return;
@@ -343,39 +383,63 @@ string UrlEncode(const string text)
 //+------------------------------------------------------------------+
 //| Close-all arm / disarm                                           |
 //+------------------------------------------------------------------+
-void ArmClose()
+string BtnLabel(const string name)
 {
-   g_closeArmed   = true;
+   if(name == BTN_CLOSE)     return "CLOSE ALL";
+   if(name == BTN_CLOSE_BUY) return "CLOSE BUY";
+   return "CLOSE SELL";
+}
+
+color BtnColor(const string name)
+{
+   if(name == BTN_CLOSE)     return clrDimGray;
+   if(name == BTN_CLOSE_BUY) return clrSeaGreen;
+   return clrIndianRed;
+}
+
+void ArmClose(const string name)
+{
+   if(g_armedBtn != "" && g_armedBtn != name)
+      DisarmClose();                       // only one button armed at a time
+
+   g_armedBtn     = name;
    g_closeArmedAt = TimeCurrent();
-   ObjectSetString (0, BTN_CLOSE, OBJPROP_TEXT, "CONFIRM?");
-   ObjectSetInteger(0, BTN_CLOSE, OBJPROP_BGCOLOR, clrRed);
+   ObjectSetString (0, name, OBJPROP_TEXT, "CONFIRM?");
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrRed);
 }
 
 void DisarmClose()
 {
-   g_closeArmed = false;
-   ObjectSetString (0, BTN_CLOSE, OBJPROP_TEXT, "CLOSE ALL");
-   ObjectSetInteger(0, BTN_CLOSE, OBJPROP_BGCOLOR, clrDimGray);
+   if(g_armedBtn == "") return;
+
+   ObjectSetString (0, g_armedBtn, OBJPROP_TEXT, BtnLabel(g_armedBtn));
+   ObjectSetInteger(0, g_armedBtn, OBJPROP_BGCOLOR, BtnColor(g_armedBtn));
+   g_armedBtn = "";
    ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
-//| Close every position, delete every pending order                 |
+//| Close positions: posType = -1 for every position, or             |
+//| POSITION_TYPE_BUY / POSITION_TYPE_SELL for one side only         |
 //+------------------------------------------------------------------+
-void CloseAll()
+void ClosePositions(const int posType)
 {
-   // positions
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
+      if(posType >= 0 && (int)PositionGetInteger(POSITION_TYPE) != posType)
+         continue;
+
       if(!trade.PositionClose(ticket))
          PrintFormat("Close pos failed %I64u: %d", ticket, trade.ResultRetcode());
       else
          PrintFormat("Closed pos %I64u", ticket);
    }
+}
 
-   // pending orders
+void DeletePendingOrders()
+{
    for(int i = OrdersTotal() - 1; i >= 0; i--)
    {
       ulong ticket = OrderGetTicket(i);
@@ -425,6 +489,15 @@ void UpdateLabels()
 
    ObjectSetString(0, LBL_SL, OBJPROP_TEXT, FormatMoneyPct(TotalMoney(slPrice), balance));
    ObjectSetString(0, LBL_TP, OBJPROP_TEXT, FormatMoneyPct(TotalMoney(tpPrice), balance));
+
+   int    withSL = 0, withTP = 0, totalPos = 0;
+   double risk   = TotalAtLevel(true,  withSL, totalPos);
+   double reward = TotalAtLevel(false, withTP, totalPos);
+
+   ObjectSetString(0, LBL_RISK,   OBJPROP_TEXT,
+                   "SL total: " + FormatLevelTotal(risk,   balance, withSL, totalPos));
+   ObjectSetString(0, LBL_REWARD, OBJPROP_TEXT,
+                   "TP total: " + FormatLevelTotal(reward, balance, withTP, totalPos));
 }
 
 string FormatMoneyPct(double money, double balance)
@@ -432,6 +505,63 @@ string FormatMoneyPct(double money, double balance)
    if(money <= 0) return "-";
    double pct = (balance > 0) ? money / balance * 100.0 : 0;
    return StringFormat("%.2f (%.1f%%)", money, pct);
+}
+
+string FormatLevelTotal(double money, double balance, int withLevel, int totalPos)
+{
+   if(totalPos == 0)  return "no positions";
+   if(withLevel == 0) return StringFormat("none set (0/%d)", totalPos);
+
+   double pct = (balance > 0) ? money / balance * 100.0 : 0;
+   string s   = StringFormat("%+.2f (%+.1f%%)", money, pct);
+   if(withLevel < totalPos)
+      s += StringFormat("   %d/%d set", withLevel, totalPos);
+   return s;
+}
+
+//+------------------------------------------------------------------+
+//| P/L of the currently selected position if closed at `price`      |
+//+------------------------------------------------------------------+
+double PositionPLAt(const double price)
+{
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   long   type   = PositionGetInteger(POSITION_TYPE);
+   double open   = PositionGetDouble(POSITION_PRICE_OPEN);
+   double volume = PositionGetDouble(POSITION_VOLUME);
+   double swap   = PositionGetDouble(POSITION_SWAP);
+
+   double mpp = MoneyPerPrice(symbol, volume);
+   if(mpp <= 0) return 0;
+
+   double diff = (type == POSITION_TYPE_BUY) ? (price - open) : (open - price);
+   return diff * mpp + swap;
+}
+
+//+------------------------------------------------------------------+
+//| Sum P/L over positions valued at their own SL (or TP) level.     |
+//| withLevel = how many positions actually have that level set.     |
+//+------------------------------------------------------------------+
+double TotalAtLevel(const bool useSL, int &withLevel, int &totalPos)
+{
+   withLevel = 0;
+   totalPos  = 0;
+   double sum = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+
+      totalPos++;
+
+      double level = useSL ? PositionGetDouble(POSITION_SL)
+                           : PositionGetDouble(POSITION_TP);
+      if(level <= 0) continue;
+
+      withLevel++;
+      sum += PositionPLAt(level);
+   }
+   return sum;
 }
 
 //+------------------------------------------------------------------+
@@ -492,7 +622,7 @@ void CreateButton(string name, int x, int y, int w, int h, string text, color bg
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
 }
 
-void CreateLabel(string name, int x, int y, string text)
+void CreateLabel(string name, int x, int y, string text, color clr = clrBlack)
 {
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
@@ -500,6 +630,6 @@ void CreateLabel(string name, int x, int y, string text)
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetString (0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clrBlack);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
 }
