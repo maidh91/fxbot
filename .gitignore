@@ -2,3 +2,5 @@ Examples/
 UnitTests/
 *.ex5
 .env
+
+.DS_Store
